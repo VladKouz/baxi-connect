@@ -263,8 +263,8 @@ class MetricCard(tk.Frame):
             )
             self.mod_bar.pack(fill="both", expand=True)
 
-    def set_value(self, text: str, modulation: float | None = None) -> None:
-        self.value_label.configure(text=text, fg=Theme.text)
+    def set_value(self, text: str, modulation: float | None = None, *, warn: bool = False) -> None:
+        self.value_label.configure(text=text, fg=Theme.warning if warn else Theme.text)
         if self.mod_bar is not None and modulation is not None:
             self.mod_bar["value"] = max(0, min(100, modulation))
 

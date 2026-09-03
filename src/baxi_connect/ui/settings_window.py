@@ -43,7 +43,7 @@ class SettingsWindow(tk.Toplevel):
 
         tk.Label(
             outer,
-            text="Подключение к Zont API и интервал обновления",
+            text="Подключение к Zont API и параметры интерфейса",
             fg=Theme.text_secondary,
             bg=Theme.bg,
             font=(Theme.pick_font_family(self), 12),
@@ -57,6 +57,7 @@ class SettingsWindow(tk.Toplevel):
         self.token_var = tk.StringVar(value=secrets.token)
         self.client_var = tk.StringVar(value=secrets.client)
         self.refresh_var = tk.StringVar(value=str(settings.refresh_interval_minutes))
+        self.font_var = tk.StringVar(value=str(settings.font_size))
 
         self._add_section(outer, "Подключение", 3)
         self._add_labeled_entry(outer, "Boiler ID", self.boiler_id_var, 4)
@@ -65,11 +66,12 @@ class SettingsWindow(tk.Toplevel):
 
         ttk.Separator(outer).grid(row=7, column=0, columnspan=2, sticky="ew", pady=18)
 
-        self._add_section(outer, "Обновление", 8)
+        self._add_section(outer, "Интерфейс", 8)
         self._add_labeled_entry(outer, "Интервал, мин", self.refresh_var, 9)
+        self._add_labeled_entry(outer, "Размер шрифта", self.font_var, 10)
 
         buttons = ttk.Frame(outer, style="TFrame")
-        buttons.grid(row=10, column=0, columnspan=2, sticky="e", pady=(22, 0))
+        buttons.grid(row=11, column=0, columnspan=2, sticky="e", pady=(22, 0))
         ttk.Button(buttons, text="Отмена", style="Ghost.TButton", command=self.destroy).pack(
             side="left", padx=(0, 10)
         )
@@ -97,8 +99,9 @@ class SettingsWindow(tk.Toplevel):
     def _save(self) -> None:
         try:
             refresh_minutes = max(1, int(self.refresh_var.get().strip()))
+            font_size = max(12, int(self.font_var.get().strip()))
         except ValueError:
-            messagebox.showerror("Ошибка", "Интервал обновления должен быть числом")
+            messagebox.showerror("Ошибка", "Интервал и размер шрифта должны быть числами")
             return
 
         secrets = Secrets(
@@ -106,7 +109,10 @@ class SettingsWindow(tk.Toplevel):
             token=self.token_var.get().strip(),
             client=self.client_var.get().strip(),
         )
-        settings = Settings(refresh_interval_minutes=refresh_minutes)
+        settings = Settings(
+            refresh_interval_minutes=refresh_minutes,
+            font_size=font_size,
+        )
 
         if not secrets.boiler_id or not secrets.token or not secrets.client:
             messagebox.showerror("Ошибка", "Заполните все поля подключения")

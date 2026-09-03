@@ -11,8 +11,9 @@ from baxi_connect.ui.theme import IconButton, MetricCard, Theme, configure_progr
 
 APP_TITLE = "Baxi Connect (Custom edition)"
 DEFAULT_WIDTH = 540
-DEFAULT_HEIGHT = 760
+DEFAULT_HEIGHT = 780
 METRIC_MIN_HEIGHT = 150
+LOW_PRESSURE_BAR = 1.0
 
 
 class DisplayWindow(tk.Toplevel):
@@ -23,28 +24,38 @@ class DisplayWindow(tk.Toplevel):
         on_open_settings: Callable[[], None],
         on_refresh: Callable[[], None],
         on_mode_change: Callable[[HeatingMode], None],
+        on_close: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(master)
         self.title(APP_TITLE)
         self.configure(bg=Theme.bg)
         self.attributes("-topmost", True)
         self.resizable(True, True)
-        self.minsize(460, 680)
+        self.minsize(460, 700)
 
         self._on_open_settings = on_open_settings
         self._on_refresh = on_refresh
         self._on_mode_change = on_mode_change
+        self._on_close = on_close
         self._drag_x = 0
         self._drag_y = 0
         self._font_size = font_size
         self._family = Theme.pick_font_family(self)
         self._metric_icons = IconCache()
+        self._has_data = False
 
         configure_progressbar(self)
         self._build_fonts()
         self._build()
         self._bind_drag()
+        self.protocol("WM_DELETE_WINDOW", self._handle_close)
         self.after(0, self._apply_initial_geometry)
+
+    def _handle_close(self) -> None:
+        if self._on_close is not None:
+            self._on_close()
+        else:
+            self.destroy()
 
     def _apply_initial_geometry(self) -> None:
         self.update_idletasks()
@@ -60,6 +71,7 @@ class DisplayWindow(tk.Toplevel):
         self._value_font = tkfont.Font(family=self._family, size=self._font_size, weight="bold")
         self._label_font = tkfont.Font(family=self._family, size=label_size)
         self._meta_font = tkfont.Font(family=self._family, size=label_size)
+        self._badge_font = tkfont.Font(family=self._family, size=10, weight="bold")
 
     def _build(self) -> None:
         shell = tk.Frame(self, bg=Theme.bg, padx=16, pady=14)
@@ -106,6 +118,31 @@ class DisplayWindow(tk.Toplevel):
             anchor="w",
         )
         self.subtitle_label.pack(anchor="w", pady=(6, 0))
+
+        self.badge_row = tk.Frame(brand_wrap, bg=Theme.bg)
+        self.badge_row.pack(anchor="w", pady=(8, 0))
+
+        self.online_badge = tk.Label(
+            self.badge_row,
+            text="—",
+            fg=Theme.bg,
+            bg=Theme.text_muted,
+            font=self._badge_font,
+            padx=8,
+            pady=2,
+        )
+        self.online_badge.pack(side="left")
+
+        self.burner_badge = tk.Label(
+            self.badge_row,
+            text="горелка",
+            fg=Theme.bg,
+            bg=Theme.text_muted,
+            font=self._badge_font,
+            padx=8,
+            pady=2,
+        )
+        self.burner_badge.pack(side="left", padx=(6, 0))
 
         actions = tk.Frame(header, bg=Theme.bg)
         actions.pack(side="right")
@@ -158,13 +195,26 @@ class DisplayWindow(tk.Toplevel):
             font=self._meta_font,
             anchor="w",
         )
-        self.status_label.pack(side="left", padx=(6, 0))
+        self.status_label.pack(side="left", padx=(6, 0), fill="x", expand=True)
+
+        self.next_refresh_label = tk.Label(
+            footer,
+            text="",
+            fg=Theme.text_muted,
+            bg=Theme.bg,
+            font=self._meta_font,
+            anchor="e",
+        )
+        self.next_refresh_label.pack(side="right")
 
     def set_font_size(self, font_size: int) -> None:
         self._font_size = font_size
         self._build_fonts()
         self.subtitle_label.configure(font=self._subtitle_font)
         self.status_label.configure(font=self._meta_font)
+        self.next_refresh_label.configure(font=self._meta_font)
+        self.online_badge.configure(font=self._badge_font)
+        self.burner_badge.configure(font=self._badge_font)
         for card in self.cards.values():
             card.value_label.configure(font=self._value_font)
             card.title_label.configure(font=self._label_font)
@@ -172,6 +222,13 @@ class DisplayWindow(tk.Toplevel):
 
     def set_mode_busy(self, busy: bool) -> None:
         self.mode_selector.set_busy(busy)
+
+    def set_next_refresh(self, seconds: int | None) -> None:
+        if seconds is None or seconds < 0:
+            self.next_refresh_label.configure(text="")
+            return
+        minutes, secs = divmod(max(0, seconds), 60)
+        self.next_refresh_label.configure(text=f"через {minutes:02d}:{secs:02d}")
 
     def _bind_drag(self) -> None:
         draggable = [self.subtitle_label, self.status_label, *self.cards.values()]
@@ -195,8 +252,36 @@ class DisplayWindow(tk.Toplevel):
             return "—"
         return f"{value:.{decimals}f}"
 
-    def show_loading(self) -> None:
+    def _set_badges(self, reading: BoilerReading | None, *, loading: bool = False) -> None:
+        if loading:
+            self.online_badge.configure(text="загрузка", bg=Theme.warning, fg=Theme.bg)
+            self.burner_badge.configure(text="…", bg=Theme.text_muted, fg=Theme.bg)
+            return
+        if reading is None:
+            self.online_badge.configure(text="ошибка", bg=Theme.danger, fg=Theme.bg)
+            self.burner_badge.configure(text="горелка ?", bg=Theme.text_muted, fg=Theme.bg)
+            return
+
+        if reading.boiler_fail:
+            self.online_badge.configure(text="авария", bg=Theme.danger, fg=Theme.bg)
+        elif reading.online:
+            self.online_badge.configure(text="онлайн", bg=Theme.success, fg=Theme.bg)
+        else:
+            self.online_badge.configure(text="офлайн", bg=Theme.danger, fg=Theme.bg)
+
+        if reading.burner_on:
+            self.burner_badge.configure(text="горелка вкл", bg=Theme.accent, fg="#ffffff")
+        else:
+            self.burner_badge.configure(text="горелка выкл", bg=Theme.text_muted, fg=Theme.bg)
+
+    def show_loading(self, *, silent: bool = False) -> None:
+        if silent and self._has_data:
+            self.status_dot.configure(fg=Theme.warning)
+            self.status_label.configure(text="Обновление…", fg=Theme.text_muted)
+            return
+
         self.subtitle_label.configure(text="Обновление данных…", fg=Theme.text_secondary)
+        self._set_badges(None, loading=True)
         self.mode_selector.set_loading()
         for card in self.cards.values():
             card.set_placeholder()
@@ -205,13 +290,16 @@ class DisplayWindow(tk.Toplevel):
 
     def show_error(self, message: str) -> None:
         self.subtitle_label.configure(text="Нет связи с котлом", fg=Theme.danger)
+        self._set_badges(None)
         self.mode_selector.set_busy(False)
         self.status_dot.configure(fg=Theme.danger)
         self.status_label.configure(text=message, fg=Theme.danger)
 
     def show_reading(self, reading: BoilerReading) -> None:
+        self._has_data = True
         color = Theme.mode_color(reading.mode_name)
         self.subtitle_label.configure(text=f"Сейчас: {reading.mode_name}", fg=color)
+        self._set_badges(reading)
         self.mode_selector.set_modes(reading.modes, reading.mode_id)
         self.mode_selector.set_busy(False)
 
@@ -223,9 +311,16 @@ class DisplayWindow(tk.Toplevel):
             self._format_number(modulation, 0),
             modulation=modulation,
         )
-        self.cards["pressure"].set_value(self._format_number(reading.pressure, 2))
+        pressure = reading.pressure
+        self.cards["pressure"].set_value(
+            self._format_number(pressure, 2),
+            warn=pressure is not None and pressure < LOW_PRESSURE_BAR,
+        )
         self.cards["temperature_dhw"].set_value(self._format_number(reading.temperature_dhw, 1))
 
-        updated = reading.updated_at.strftime("%d.%m.%Y %H:%M")
-        self.status_dot.configure(fg=Theme.success)
-        self.status_label.configure(text=f"Обновлено {updated}", fg=Theme.text_secondary)
+        updated = reading.updated_at.strftime("%H:%M:%S")
+        self.status_dot.configure(fg=Theme.success if reading.online else Theme.warning)
+        self.status_label.configure(
+            text=f"{reading.status_summary} · {updated}",
+            fg=Theme.text_secondary,
+        )
