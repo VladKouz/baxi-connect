@@ -20,10 +20,9 @@ class ModeChip(tk.Frame):
         label_font: tkfont.Font,
         command: Callable[[HeatingMode], None],
     ) -> None:
-        self._idle_bg = Theme.surface
         super().__init__(
             master,
-            bg=self._idle_bg,
+            bg=Theme.surface,
             height=self.HEIGHT,
             highlightthickness=2,
             highlightbackground=Theme.border,
@@ -43,11 +42,11 @@ class ModeChip(tk.Frame):
         self.accent_bar = tk.Frame(self, bg=self._color, height=3)
         self.accent_bar.pack(fill="x")
 
-        self.inner = tk.Frame(self, bg=self._idle_bg)
+        self.inner = tk.Frame(self, bg=Theme.surface)
         self.inner.pack(fill="both", expand=True, padx=6, pady=8)
         self.inner.grid_columnconfigure(0, weight=1)
 
-        self.icon_label = tk.Label(self.inner, bg=self._idle_bg)
+        self.icon_label = tk.Label(self.inner, bg=Theme.surface)
         if icon is not None:
             self.icon_label.configure(image=icon)
         self.icon_label.grid(row=0, column=0, pady=(0, 4))
@@ -56,14 +55,14 @@ class ModeChip(tk.Frame):
             self.inner,
             text=mode.name,
             fg=Theme.text_secondary,
-            bg=self._idle_bg,
+            bg=Theme.surface,
             font=label_font,
             wraplength=64,
             justify="center",
         )
         self.name_label.grid(row=1, column=0, sticky="ew")
 
-        self.dot = tk.Label(self.inner, text="", bg=self._idle_bg, font=("", 8))
+        self.dot = tk.Label(self.inner, text="", bg=Theme.surface, font=("", 8))
         self.dot.grid(row=2, column=0, pady=(4, 0))
 
         for widget in (self, self.inner, self.icon_label, self.name_label, self.dot):
@@ -128,13 +127,12 @@ class ModeChip(tk.Frame):
             dot = ""
             dot_fg = Theme.text_muted
         else:
-            bg = self._idle_bg
+            bg = Theme.surface
             border = Theme.border
             text = Theme.text_secondary
             dot = ""
             dot_fg = Theme.text_muted
 
-        self._idle_bg = bg
         self.configure(bg=bg, highlightbackground=border)
         self.inner.configure(bg=bg)
         self.icon_label.configure(bg=bg)
@@ -223,6 +221,13 @@ class ModeSelector(tk.Frame):
             chip.set_wraplength(chip_width)
 
     def set_modes(self, modes: list[HeatingMode], active_mode_id: int | None) -> None:
+        same_ids = [chip.mode.id for chip in self._chips] == [mode.id for mode in modes]
+        same_names = [chip.mode.name for chip in self._chips] == [mode.name for mode in modes]
+        if same_ids and same_names and self._chips:
+            self.set_active_mode(active_mode_id)
+            self.set_busy(False)
+            return
+
         for chip in self._chips:
             chip.grid_forget()
             chip.destroy()

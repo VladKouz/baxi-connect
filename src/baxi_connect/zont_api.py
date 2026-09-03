@@ -38,10 +38,15 @@ def _post_json(url: str, secrets: Secrets, payload: dict) -> dict:
 
 
 def _find_device(devices: list[dict], boiler_id: str) -> dict:
+    needle = boiler_id.strip().casefold()
     for device in devices:
-        if device.get("serial") == boiler_id:
+        serial = str(device.get("serial") or "").strip()
+        if serial.casefold() == needle:
             return device
-    raise ZontApiError(f"Устройство с серийным номером {boiler_id} не найдено")
+        name = str(device.get("name") or "").strip()
+        if name.casefold() == needle:
+            return device
+    raise ZontApiError(f"Устройство «{boiler_id}» не найдено")
 
 
 def _device_id(device: dict) -> int:
@@ -52,27 +57,46 @@ def _device_id(device: dict) -> int:
 
 
 def _load_modes(device: dict) -> list[HeatingMode]:
-    modes = []
+    modes: list[HeatingMode] = []
     for mode in (device.get("z3k_config") or {}).get("heating_modes") or []:
-        if "id" in mode and mode.get("name"):
-            modes.append(HeatingMode(id=int(mode["id"]), name=str(mode["name"])))
+        if "id" not in mode or not mode.get("name"):
+            continue
+        modes.append(
+            HeatingMode(
+                id=int(mode["id"]),
+                name=str(mode["name"]),
+                position=int(mode.get("position") or 0),
+            )
+        )
+    modes.sort(key=lambda item: (item.position, item.name.casefold()))
     return modes
 
 
-def _find_opentherm_block(z3k_state: dict) -> dict | None:
+def _find_opentherm_entry(z3k_state: dict) -> tuple[dict | None, dict]:
+    """Return (ot_block, adapter_entry)."""
     for value in z3k_state.values():
-        if isinstance(value, dict) and isinstance(value.get("ot"), dict):
-            ot = value["ot"]
-            if any(key in ot for key in ("bt", "rml", "wp", "dt")):
-                return ot
-    return None
+        if not isinstance(value, dict):
+            continue
+        ot = value.get("ot")
+        if isinstance(ot, dict) and any(key in ot for key in ("bt", "rml", "wp", "dt")):
+            return ot, value
+    return None, {}
 
 
 def _resolve_current_mode(device: dict, z3k_state: dict) -> tuple[int | None, str]:
     modes = {mode.id: mode.name for mode in _load_modes(device)}
-
     circuits = (device.get("z3k_config") or {}).get("heating_circuits") or []
+
+    preferred = []
+    others = []
     for circuit in circuits:
+        name = str(circuit.get("name") or "").casefold()
+        if "отопл" in name:
+            preferred.append(circuit)
+        else:
+            others.append(circuit)
+
+    for circuit in preferred + others:
         circuit_id = str(circuit.get("id"))
         state = z3k_state.get(circuit_id)
         if not isinstance(state, dict):
@@ -91,16 +115,22 @@ def _resolve_current_mode(device: dict, z3k_state: dict) -> tuple[int | None, st
 
 
 def fetch_boiler_reading(secrets: Secrets) -> BoilerReading:
+    if not secrets.boiler_id or not secrets.token or not secrets.client:
+        raise ZontApiError("Заполните настройки подключения (⚙)")
+
     payload = _post_json(ZONT_API_URL, secrets, {"load_io": True})
     device = _find_device(payload.get("devices") or [], secrets.boiler_id)
     io = device.get("io") or {}
     z3k_state = io.get("z3k-state") or {}
-    ot = _find_opentherm_block(z3k_state)
+    ot, adapter = _find_opentherm_entry(z3k_state)
 
     if ot is None:
         raise ZontApiError("Данные OpenTherm не найдены")
 
     mode_id, mode_name = _resolve_current_mode(device, z3k_state)
+    flags = [str(flag) for flag in (ot.get("s") or [])]
+    adapter_status = adapter.get("status") or {}
+    connection = io.get("connection-state") or {}
 
     return BoilerReading(
         device_id=_device_id(device),
@@ -112,6 +142,13 @@ def fetch_boiler_reading(secrets: Secrets) -> BoilerReading:
         pressure=ot.get("wp"),
         temperature_dhw=ot.get("dt"),
         updated_at=datetime.now(timezone.utc).astimezone(),
+        online=bool(device.get("online")),
+        burner_on="fl" in flags,
+        heating_on="ch" in flags,
+        dhw_on="dhw" in flags,
+        boiler_fail=bool(adapter_status.get("boiler_fail") or "f" in flags),
+        connection_channel=connection.get("connection_channel"),
+        ot_flags=flags,
     )
 
 
